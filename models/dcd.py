@@ -37,7 +37,7 @@ class dcdLoss(nn.Module):
         ny = torch.bincount(pred_paired_idx, minlength=num_gts)[pred_paired_idx].float().detach() ** self.n_lambda
 
         gt_cost = frac_21 * torch.exp(-self.alpha*torch.norm(gt_pts-gt_paired_pts,dim=-1))/(nx+1e-6)
-        loss_1 = self.loss(torch.ones(num_gts,device=gt_pts.device),gt_cost)
+        loss_1 = self.loss(torch.ones(num_gts,device=gt_pts.device),gt_cost)*weight_gt
         pred_cost =frac_12 * torch.exp(-self.alpha*torch.norm(pred_pts-pred_paired_pts,dim=-1))/(ny+1e-6)
         loss_2 = self.loss(torch.ones(num_preds,device=pred_pts.device),pred_cost)
 
