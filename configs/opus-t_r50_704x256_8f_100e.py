@@ -91,7 +91,7 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=2.0),
-        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5)),
+        loss_pts=dict(type='dcdLoss')),
     train_cfg=dict(
         pts=dict(
             cls_weights=[
@@ -202,10 +202,10 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 100
-batch_size = 8
+batch_size = 1
 
 # load pretrained weights
-load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
+load_from = None
 revise_keys = [('backbone', 'img_backbone')]
 
 # resume the last training

@@ -163,27 +163,34 @@ class OPUSHead(BaseModule):
              gt_masks_list, gt_labels_list)
         
         gt_paired_pts, pred_paired_pts= [], []
+        gt_paired_idx, pred_paired_idx= [], []
         for i in range(num_imgs):
             gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
             pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
+            gt_paired_idx.append(gt_paired_idx_list[i])
+            pred_paired_idx.append(pred_paired_idx_list[i])
 
         # concatenate all results from different samples
         cls_scores = torch.cat(cls_scores_list)
         labels = torch.cat(labels_list)
         cls_weights = torch.cat(cls_weights)
+
         gt_pts = torch.cat(gt_points_list)
         gt_paired_pts = torch.cat(gt_paired_pts)
+        gt_paired_idx = torch.cat(gt_paired_idx)
         gt_pts_weights = torch.cat(gt_pts_weights)
+
         pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
+        pred_paired_idx = torch.cat(pred_paired_idx)
 
         # calculate loss cls
         loss_cls = self.loss_cls(cls_scores,
                                  labels,
                                  weight=cls_weights,
                                  avg_factor=cls_scores.shape[0])
-        # calculate loss pts
         loss_pts = pred_pts.new_tensor(0)
+        """ cd loss
         loss_pts += self.loss_pts(gt_pts,
                                   gt_paired_pts,
                                   weight=gt_pts_weights[..., None],
@@ -191,7 +198,14 @@ class OPUSHead(BaseModule):
         loss_pts += self.loss_pts(pred_pts, 
                                   pred_paired_pts,
                                   avg_factor=pred_pts.shape[0])
-
+        """
+        loss_pts += self.loss_pts(gt_pts,
+                                  gt_paired_pts,
+                                  pred_pts, 
+                                  pred_paired_pts,
+                                  gt_paired_idx, 
+                                  pred_paired_idx,
+                                  weight_gt=gt_pts_weights[...])
         return loss_cls, loss_pts
     
     @force_fp32(apply_to=('preds_dicts'))
