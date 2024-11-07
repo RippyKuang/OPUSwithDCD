@@ -12,6 +12,7 @@ from nuscenes.utils.geometry_utils import transform_matrix
 from torch.utils.data import DataLoader
 from models.utils import sparse2dense
 from .old_metrics import Metric_mIoU
+from mmcv.ops import knn
 
 
 @DATASETS.register_module()
@@ -19,6 +20,9 @@ class NuScenesOccDataset(NuScenesDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(filter_empty_gt=False, *args, **kwargs)
         self.data_infos = self.load_annotations(self.ann_file)
+        self.pc_range = torch.tensor([-40.0, -40.0, -1.0, 40.0, 40.0, 5.4])
+        self.voxel_size = torch.tensor([0.4, 0.4, 0.4])
+        self.scene_size = self.pc_range[3:] - self.pc_range[:3]
     
     def collect_cam_sweeps(self, index, into_past=150, into_future=0):
         all_sweeps_prev = []
@@ -143,6 +147,56 @@ class NuScenesOccDataset(NuScenesDataset):
         results_dict.update(
             self.eval_riou(occ_results, runner=runner, show_dir=show_dir, **eval_kwargs))
         return results_dict
+    
+    def down_gt(self,gt_points_list,gt_masks_list,gt_labels_list):
+        interval = gt_points_list.new_tensor([0.1])
+        exclude_values = gt_labels_list.new_tensor([17])  
+        pos_list = [0, 1, 2, [0, 1], [0, 2], [1, 2], [0, 1, 2]]
+
+        mask = ~torch.isin(gt_labels_list, exclude_values) 
+        offset = gt_points_list.new_tensor([0.1,0.1,0.1])
+            
+        up_coords = (gt_points_list[mask]-offset).unsqueeze(1).repeat(1, 8, 1).contiguous()
+        up_coords_label = gt_labels_list[mask].unsqueeze(1).repeat(1, 8).contiguous()
+        up_coords_mask = gt_masks_list[mask].unsqueeze(1).repeat(1, 8).contiguous()
+        for j in range(len(pos_list)):
+            up_coords[:, j + 1, pos_list[j]] += interval
+                
+        up_coords = up_coords.reshape(-1, 3)
+        up_coords_label = up_coords_label.reshape(-1)
+        up_coords_mask = up_coords_mask.reshape(-1)
+        new_gt_points_list = torch.cat((gt_points_list,up_coords),dim=0)
+        new_gt_labels_list = torch.cat((gt_labels_list,up_coords_label),dim=0)
+        new_gt_masks_list = torch.cat((gt_masks_list,up_coords_mask),dim=0)
+            
+        return new_gt_points_list,new_gt_masks_list,new_gt_labels_list
+    
+    def get_sparse_voxels(self, voxel_semantics, mask_camera):
+        W, H, Z = voxel_semantics.shape
+        device = voxel_semantics.device
+        voxel_semantics = voxel_semantics.long()
+
+        x = torch.arange(0, W, dtype=torch.float32, device=device)
+        x = (x + 0.5) / W * self.scene_size[0] + self.pc_range[0]
+        y = torch.arange(0, H, dtype=torch.float32, device=device)
+        y = (y + 0.5) / H * self.scene_size[1] + self.pc_range[1]
+        z = torch.arange(0, Z, dtype=torch.float32, device=device)
+        z = (z + 0.5) / Z * self.scene_size[2] + self.pc_range[2]
+
+        xx = x[:, None, None].expand(W, H, Z)
+        yy = y[None, :, None].expand(W, H, Z)
+        zz = z[None, None, :].expand(W, W, Z)
+        coors = torch.stack([xx, yy, zz], dim=-1) 
+
+        gt_points, gt_masks, gt_labels = [], [], []
+ 
+        mask = voxel_semantics != 17
+
+        gt_points = coors[mask]
+        gt_masks = mask_camera[mask] 
+        gt_labels = voxel_semantics[mask]
+        
+        return gt_points, gt_masks, gt_labels
 
     def eval_miou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
         occ_gts = []
@@ -150,8 +204,8 @@ class NuScenesOccDataset(NuScenesDataset):
         lidar_origins = []
 
         print('\nStarting Evaluation...')
-        metric = Metric_mIoU(use_image_mask=True)
-
+        metric = Metric_mIoU(use_image_mask=True, num_classes=2)
+        all_cd_loss =[]
         from tqdm import tqdm
         for i in tqdm(range(len(occ_results))):
             result_dict = occ_results[i]
@@ -166,15 +220,44 @@ class NuScenesOccDataset(NuScenesDataset):
             mask_lidar = occ_infos['mask_lidar'].astype(np.bool_)
             mask_camera = occ_infos['mask_camera'].astype(np.bool_)
 
+            p,m,l = self.get_sparse_voxels(torch.tensor(occ_labels),torch.tensor(mask_camera))
+            _p,_,_ = self.down_gt(p,m,l)
+
+            all_cd_loss.append(self.calc_cd(torch.tensor(result_dict['refine_pts']), _p).detach().cpu().numpy())
+            
             occ_pred, _ = sparse2dense(
                 result_dict['occ_loc'],
                 result_dict['sem_pred'],
                 dense_shape=occ_labels.shape,
                 empty_value=17)
             
+            # _occ_pred = np.where(occ_pred == 17,1,0)
+            # _occ_labels = np.where(occ_labels == 17,1,0)
+
             metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
-        
+        np.save("./gtup.npy",np.asarray(all_cd_loss))
+        print(f"cd loss mean:{np.asarray(all_cd_loss).mean()}")
         return {'mIoU': metric.count_miou()}
+    
+    # prim gtup cd loss mean:1.7633755207061768 miou 35.94
+    # gtup gtup cd loss mean:1.7894799709320068 miou 35.64
+    
+    # prim cd loss mean:1.8695778846740723
+    # gtup cd loss mean:1.9068219661712646
+
+    # prim no fliter cd loss mean:1.2979758977890015 miou 41.48
+    # gtup no fliter cd loss mean:1.3073328733444214 miou 41.44
+
+    # prim no fliter gtup cd loss mean:1.1869158744812012 miou 41.48
+    # gtup no fliter gtup cd loss mean:1.1857978105545044 miou 41.44
+
+    def calc_cd(self, pred_pts, gt_pts):
+        g = gt_pts.cuda()
+        p = pred_pts.cuda()
+        g_pair_p_idx = knn(1,p[None,...],g[None,...]).permute(0, 2, 1).squeeze().long()
+        p_pair_g_idx = knn(1,g[None,...],p[None,...]).permute(0, 2, 1).squeeze().long()
+        g_pair_p,p_pair_g = p[g_pair_p_idx],g[p_pair_g_idx]
+        return torch.abs(g - g_pair_p).sum(-1).mean()+ torch.abs(p - p_pair_g).sum(-1).mean()
     
     def eval_riou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
         occ_gts = []

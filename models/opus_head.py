@@ -190,7 +190,7 @@ class OPUSHead(BaseModule):
                                  weight=cls_weights,
                                  avg_factor=cls_scores.shape[0])
         loss_pts = pred_pts.new_tensor(0)
-        """ cd loss
+    
         loss_pts += self.loss_pts(gt_pts,
                                   gt_paired_pts,
                                   weight=gt_pts_weights[..., None],
@@ -198,14 +198,14 @@ class OPUSHead(BaseModule):
         loss_pts += self.loss_pts(pred_pts, 
                                   pred_paired_pts,
                                   avg_factor=pred_pts.shape[0])
-        """
-        loss_pts += self.loss_pts(gt_pts,
-                                  gt_paired_pts,
-                                  pred_pts, 
-                                  pred_paired_pts,
-                                  gt_paired_idx, 
-                                  pred_paired_idx,
-                                  weight_gt=gt_pts_weights[...])
+
+        # loss_pts += self.loss_pts(gt_pts,
+        #                           gt_paired_pts,
+        #                           pred_pts, 
+        #                           pred_paired_pts,
+        #                           gt_paired_idx, 
+        #                           pred_paired_idx,
+        #                           weight_gt=gt_pts_weights[...])
         return loss_cls, loss_pts
     
     @force_fp32(apply_to=('preds_dicts'))
@@ -255,7 +255,7 @@ class OPUSHead(BaseModule):
         refine_pts = all_refine_pts[-1]
 
         batch_size = refine_pts.shape[0]
-        ctr_dist_thr = self.test_cfg.get('ctr_dist_thr', 3.)
+        ctr_dist_thr = self.test_cfg.get('ctr_dist_thr', 1e5)
         score_thr = self.test_cfg.get('score_thr', 0.)
 
         result_list = []
@@ -298,7 +298,8 @@ class OPUSHead(BaseModule):
             labels = scores.argmax(dim=-1)
             result_list.append(dict(
                 sem_pred=labels.detach().cpu().numpy(),
-                occ_loc=voxels.detach().cpu().numpy()))
+                occ_loc=voxels.detach().cpu().numpy(),
+                refine_pts=refine_pts.detach().cpu().numpy()))
 
         return result_list
     
